@@ -1,0 +1,72 @@
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenv
+venv/
+.env/
+
+# Fichiers de logs et de débogage
+*.log
+debug.log
+
+# Fichiers de base de données
+*.sqlite3
+*.db
+
+# Fichiers spécifiques aux IDE et éditeurs
+.vscode/
+.idea/
+*.iml
+
+# Dépendances installées avec pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Caches de tests
+.tox/
+.nox/
+
+# Caches et fichiers temporaires
+*.swp
+*.swo
+
+# Fichiers de configuration personnels
+.env
+.settings/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Build et distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Fichiers générés par pytest
+.pytest_cache/
+
+# Cython
+*.c
+*.so
+
+# Docker
+*.dockerignore
+
+# Heroku
+*.heroku/
+
+# Coverage reports
+htmlcov/
+.coverage*
+
+# Profiler
+*.prof
+
+# Fichiers de configuration
+.env
+
+# Fichiers de logs
+*.log

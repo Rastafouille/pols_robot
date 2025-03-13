@@ -1,0 +1,131 @@
+"""
+Classe pour l'échange KuCoin
+"""
+import os
+import logging
+from datetime import datetime
+from dotenv import load_dotenv
+from kucoin.client import Client
+from exchange_base import ExchangeBase, PriceInfo, BalanceInfo
+
+class KucoinExchange(ExchangeBase):
+    """Gestion des opérations sur KuCoin"""
+    
+    def __init__(self, pols_quantity: int = 1000):
+        """Initialise l'exchange KuCoin"""
+        super().__init__("KuCoin")
+        self.pols_quantity = pols_quantity
+        self._load_config()
+        self._init_client()
+
+    def _load_config(self):
+        """Charge la configuration depuis .env"""
+        load_dotenv()
+        self.api_key = os.getenv("KUCOIN_API_KEY")
+        self.api_secret = os.getenv("KUCOIN_API_SECRET")
+        self.api_passphrase = os.getenv("KUCOIN_API_PASSPHRASE")
+        
+        if not all([self.api_key, self.api_secret, self.api_passphrase]):
+            raise ValueError("Configuration KuCoin incomplète dans .env")
+
+    def _init_client(self):
+        """Initialise le client KuCoin"""
+        self.client = Client(self.api_key, self.api_secret, self.api_passphrase)
+
+    def get_price_info(self) -> PriceInfo:
+        """Récupère les informations de prix"""
+        try:
+            # Récupérer le carnet d'ordres
+            order_book = self.client.get_order_book("POLS-USDT")
+            
+            if not order_book or 'bids' not in order_book or 'asks' not in order_book:
+                raise Exception("Impossible de récupérer le carnet d'ordres")
+            
+            # Calculer le prix moyen d'achat pour la quantité demandée
+            total_buy_cost = 0
+            remaining_quantity = self.pols_quantity
+            
+            for ask in order_book['asks']:
+                price = float(ask[0])
+                quantity = float(ask[1])
+                
+                if remaining_quantity <= 0:
+                    break
+                    
+                if quantity <= remaining_quantity:
+                    total_buy_cost += price * quantity
+                    remaining_quantity -= quantity
+                else:
+                    total_buy_cost += price * remaining_quantity
+                    remaining_quantity = 0
+            
+            if remaining_quantity > 0:
+                raise Exception(f"Pas assez de liquidité pour acheter {self.pols_quantity} POLS")
+            
+            # Calculer le prix moyen de vente pour la quantité demandée
+            total_sell_revenue = 0
+            remaining_quantity = self.pols_quantity
+            
+            for bid in order_book['bids']:
+                price = float(bid[0])
+                quantity = float(bid[1])
+                
+                if remaining_quantity <= 0:
+                    break
+                    
+                if quantity <= remaining_quantity:
+                    total_sell_revenue += price * quantity
+                    remaining_quantity -= quantity
+                else:
+                    total_sell_revenue += price * remaining_quantity
+                    remaining_quantity = 0
+            
+            if remaining_quantity > 0:
+                raise Exception(f"Pas assez de liquidité pour vendre {self.pols_quantity} POLS")
+            
+            # Calculer les prix moyens
+            current_price = float(order_book['asks'][0][0])  # Prix spot
+            buy_price = total_buy_cost / self.pols_quantity
+            sell_price = total_sell_revenue / self.pols_quantity
+            
+            return PriceInfo(
+                current_price=current_price,
+                buy_price=buy_price,
+                sell_price=sell_price,
+                buy_cost=total_buy_cost,
+                sell_revenue=total_sell_revenue,
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        except Exception as e:
+            logging.error(f"Erreur lors de la récupération des prix KuCoin: {e}")
+            raise
+
+    def get_balance(self) -> BalanceInfo:
+        """Récupère les soldes du compte"""
+        try:
+            # Récupérer les soldes
+            accounts = self.client.get_accounts()
+            
+            # Trouver les comptes POLS et USDT
+            pols_account = next((acc for acc in accounts if acc["currency"] == "POLS"), None)
+            usdt_account = next((acc for acc in accounts if acc["currency"] == "USDT"), None)
+            
+            # Récupérer les soldes avec les bons noms de champs
+            pols_free = float(pols_account["available"]) if pols_account else 0
+            pols_locked = float(pols_account["holds"]) if pols_account else 0
+            usdt_free = float(usdt_account["available"]) if usdt_account else 0
+            usdt_locked = float(usdt_account["holds"]) if usdt_account else 0
+            
+            # Calculer la valeur totale en USDT
+            pols_value_usdt = pols_free * self.get_price_info().current_price
+            
+            return BalanceInfo(
+                pols_free=pols_free,
+                pols_locked=pols_locked,
+                usdt_free=usdt_free,
+                usdt_locked=usdt_locked,
+                pols_value_usdt=pols_value_usdt
+            )
+        except Exception as e:
+            logging.error(f"Erreur lors de la récupération des soldes KuCoin: {e}")
+            raise 
