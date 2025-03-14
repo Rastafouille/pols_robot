@@ -62,6 +62,17 @@ Le bot est composé de plusieurs modules interconnectés :
 
 ## Installation
 
+### 1. Création du Bot Telegram
+1. Ouvrir Telegram et rechercher "@BotFather"
+2. Démarrer une conversation avec `/start`
+3. Créer un nouveau bot avec la commande `/newbot`
+4. Suivre les instructions :
+   - Entrer le nom du bot (ex: "POLS Trading Bot")
+   - Entrer le username du bot (doit se terminer par "bot", ex: "pols_trading_bot")
+5. BotFather vous donnera un token API (ex: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+6. Sauvegarder ce token, il sera nécessaire pour la configuration
+
+### 2. Installation du Bot
 1. Cloner le repository :
 ```bash
 git clone https://github.com/votre-username/POLSrobot.git
@@ -88,6 +99,19 @@ KUCOIN_API_PASSPHRASE=votre_passphrase
 # PancakeSwap Configuration
 PANCAKESWAP_WALLET_ADDRESS=votre_adresse
 PANCAKESWAP_PRIVATE_KEY=votre_clé_privée
+```
+
+### 3. Configuration des Commandes du Bot
+1. Ouvrir une conversation avec @BotFather
+2. Utiliser la commande `/mybots`
+3. Sélectionner votre bot
+4. Cliquer sur "Edit Bot" > "Edit Commands"
+5. Copier-coller les commandes suivantes :
+```
+start - Démarrer le bot et afficher le menu principal
+config - Afficher la configuration actuelle
+set_quantity - Définir la quantité de POLS à surveiller
+set_threshold - Définir le seuil d'arbitrage en pourcentage
 ```
 
 ## Configuration
