@@ -128,4 +128,42 @@ class KucoinExchange(ExchangeBase):
             )
         except Exception as e:
             logging.error(f"Erreur lors de la récupération des soldes KuCoin: {e}")
+            raise
+
+    def create_market_buy_order(self, amount: int) -> str:
+        """Crée un ordre d'achat au marché sur KuCoin
+        
+        Args:
+            amount (int): Quantité de POLS à acheter
+            
+        Returns:
+            str: ID de l'ordre d'achat
+            
+        Raises:
+            Exception: Si l'achat échoue
+        """
+        try:
+            # Vérifier le solde USDT disponible
+            balance = self.get_balance()
+            price_info = self.get_price_info()
+            cost = amount * price_info.buy_price * 1.001  # Prix + 0.1% de frais
+            
+            if balance.usdt_free < cost:
+                raise ValueError(f"Solde USDT insuffisant: {balance.usdt_free:.2f} USDT requis: {cost:.2f} USDT")
+            
+            # Créer l'ordre d'achat
+            order = self.client.create_market_order(
+                symbol='POLS-USDT',
+                side='buy',
+                size=amount
+            )
+            
+            if order:
+                logging.info(f"Achat de {amount} POLS effectué avec succès. Order ID: {order['orderId']}")
+                return order['orderId']
+            else:
+                raise Exception("La création de l'ordre a échoué")
+                
+        except Exception as e:
+            logging.error(f"Erreur lors de l'achat sur KuCoin: {e}")
             raise 

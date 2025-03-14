@@ -5,10 +5,11 @@ import os
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, Update
 from telegram.constants import ParseMode
 from typing import Optional, Dict, Any
+from telegram import filters
 
 class TelegramNotifier:
     """Gestionnaire des notifications Telegram"""
@@ -42,6 +43,7 @@ class TelegramNotifier:
             self.app.add_handler(CommandHandler("set_quantity", self._handle_set_quantity))
             self.app.add_handler(CommandHandler("config", self._handle_config))
             self.app.add_handler(CallbackQueryHandler(self._handle_callback))
+            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
             
             # Configurer les commandes pour l'autocomplétion
             await self._setup_commands()
@@ -144,7 +146,11 @@ class TelegramNotifier:
                     InlineKeyboardButton("📈 Opportunités d'arbitrage", callback_data="arbitrage")
                 ],
                 [
-                    InlineKeyboardButton("⚙️ Configuration", callback_data="config")
+                    InlineKeyboardButton("⚙️ Configuration", callback_data="config"),
+                    InlineKeyboardButton("💰 Vendre POLS", callback_data="sell_pols")
+                ],
+                [
+                    InlineKeyboardButton("🛒 Acheter POLS", callback_data="buy_pols")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -152,11 +158,7 @@ class TelegramNotifier:
             await update.message.reply_text(
                 f"👋 Bienvenue! Je suis votre bot de surveillance des prix POLS.\n\n"
                 f"Je surveille les prix sur KuCoin et PancakeSwap pour {self.pols_quantity} POLS.\n"
-                f"Seuil d'arbitrage: {self.arbitrage_threshold}%\n\n"
-                f"Commandes disponibles:\n"
-                f"/config - Afficher la configuration\n"
-                f"/set_quantity <nombre> - Définir la quantité de POLS\n"
-                f"/set_threshold <pourcentage> - Définir le seuil d'arbitrage\n\n",
+                f"Seuil d'arbitrage: {self.arbitrage_threshold}%\n\n",
                 reply_markup=reply_markup
             )
             logging.info("Message de démarrage envoyé avec succès")
@@ -204,6 +206,180 @@ class TelegramNotifier:
                     f"/set_threshold [pourcentage] - Définir le seuil d'arbitrage"
                 )
                 await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+            elif query.data == "sell_pols":
+                message = (
+                    f"💰 <b>Vente de POLS</b>\n\n"
+                    f"Veuillez entrer le montant de POLS à vendre.\n"
+                    f"Exemple: <code>10</code>"
+                )
+                await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+                context.user_data['action'] = 'sell'
+                context.user_data['awaiting_amount'] = True
+            elif query.data == "buy_pols":
+                message = (
+                    f"🛒 <b>Achat de POLS</b>\n\n"
+                    f"Veuillez entrer le montant de POLS à acheter.\n"
+                    f"Exemple: <code>10</code>"
+                )
+                await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+                context.user_data['action'] = 'buy'
+                context.user_data['awaiting_amount'] = True
+            elif query.data.startswith(("sell_kucoin_", "sell_pancake_", "buy_kucoin_", "buy_pancake_")):
+                if 'amount' not in context.user_data:
+                    await query.message.reply_text("❌ Erreur: Montant non spécifié")
+                    return
+                    
+                amount = context.user_data['amount']
+                exchange = query.data.split('_')[1]  # kucoin ou pancake
+                action = query.data.split('_')[0]  # buy ou sell
+                
+                if exchange == 'kucoin':
+                    kucoin = context.bot_data.get('kucoin')
+                    if kucoin:
+                        try:
+                            if action == 'sell':
+                                # Vérifier le solde disponible
+                                balance = kucoin.get_balance()
+                                if balance.pols_free < amount:
+                                    message = f"❌ Solde insuffisant! Vous avez seulement {balance.pols_free:.4f} POLS disponible."
+                                    await query.message.reply_text(message)
+                                    return
+
+                                # Obtenir le prix actuel
+                                price_info = kucoin.get_price_info()
+                                current_price = price_info.current_price
+
+                                # Créer l'ordre de vente
+                                order = kucoin.client.create_market_order(
+                                    symbol='POLS-USDT',
+                                    side='sell',
+                                    size=amount
+                                )
+                                
+                                if order:
+                                    message = (
+                                        f"✅ <b>Vente de {amount} POLS effectuée sur KuCoin</b>\n\n"
+                                        f"• Quantité: {amount} POLS\n"
+                                        f"• Prix: <code>{current_price:.4f}</code> USDT\n"
+                                        f"• Montant total: <code>{amount * current_price:.4f}</code> USDT\n"
+                                        f"• Frais (0.1%): <code>{amount * current_price * 0.001:.4f}</code> USDT\n"
+                                        f"• Montant net: <code>{amount * current_price * 0.999:.4f}</code> USDT\n\n"
+                                        f"🔗 <a href='https://www.kucoin.com/trade/POLS-USDT'>Voir l'ordre sur KuCoin</a>"
+                                    )
+                                else:
+                                    message = "❌ Erreur lors de la création de l'ordre de vente"
+                            else:  # buy
+                                # Vérifier le solde USDT disponible
+                                balance = kucoin.get_balance()
+                                cost = amount * kucoin.get_price_info().buy_price * 1.001  # Prix + 0.1% de frais
+                                
+                                if balance.usdt_free < cost:
+                                    message = f"❌ Solde insuffisant! Vous avez seulement {balance.usdt_free:.4f} USDT disponible."
+                                    await query.message.reply_text(message)
+                                    return
+
+                                # Obtenir le prix actuel
+                                price_info = kucoin.get_price_info()
+                                current_price = price_info.current_price
+
+                                # Créer l'ordre d'achat
+                                order = kucoin.client.create_market_order(
+                                    symbol='POLS-USDT',
+                                    side='buy',
+                                    size=amount
+                                )
+                                
+                                if order:
+                                    message = (
+                                        f"✅ <b>Achat de {amount} POLS effectué sur KuCoin</b>\n\n"
+                                        f"• Quantité: {amount} POLS\n"
+                                        f"• Prix: <code>{current_price:.4f}</code> USDT\n"
+                                        f"• Montant total: <code>{amount * current_price:.4f}</code> USDT\n"
+                                        f"• Frais (0.1%): <code>{amount * current_price * 0.001:.4f}</code> USDT\n"
+                                        f"• Coût total: <code>{amount * current_price * 1.001:.4f}</code> USDT\n\n"
+                                        f"🔗 <a href='https://www.kucoin.com/trade/POLS-USDT'>Voir l'ordre sur KuCoin</a>"
+                                    )
+                                else:
+                                    message = "❌ Erreur lors de la création de l'ordre d'achat"
+                                    
+                            await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+                            
+                        except Exception as e:
+                            error_message = f"❌ Erreur lors de l'opération: {str(e)}"
+                            logging.error(error_message)
+                            await query.message.reply_text(error_message)
+                else:  # pancakeswap
+                    pancakeswap = context.bot_data.get('pancakeswap')
+                    if pancakeswap:
+                        try:
+                            if action == 'sell':
+                                # Vérifier le solde disponible
+                                balance = pancakeswap.get_balance()
+                                if balance.pols_free < amount:
+                                    message = f"❌ Solde insuffisant! Vous avez seulement {balance.pols_free:.4f} POLS disponible."
+                                    await query.message.reply_text(message)
+                                    return
+
+                                # Obtenir le prix actuel
+                                price_info = pancakeswap.get_price_info()
+                                current_price = price_info.current_price
+
+                                # Créer l'ordre de vente
+                                order = pancakeswap.create_market_sell_order(amount)
+                                
+                                if order:
+                                    message = (
+                                        f"✅ <b>Vente de {amount} POLS effectuée sur PancakeSwap</b>\n\n"
+                                        f"• Quantité: {amount} POLS\n"
+                                        f"• Prix: <code>{current_price:.4f}</code> USDT\n"
+                                        f"• Montant total: <code>{amount * current_price:.4f}</code> USDT\n"
+                                        f"• Frais (0.25%): <code>{amount * current_price * 0.0025:.4f}</code> USDT\n"
+                                        f"• Montant net: <code>{amount * current_price * 0.9975:.4f}</code> USDT\n\n"
+                                        f"🔗 <a href='https://bscscan.com/tx/{order}'>Voir la transaction sur BSCScan</a>"
+                                    )
+                                else:
+                                    message = "❌ Erreur lors de la création de l'ordre de vente"
+                            else:  # buy
+                                # Vérifier le solde USDT disponible
+                                balance = pancakeswap.get_balance()
+                                cost = amount * pancakeswap.get_price_info().buy_price * 1.0025  # Prix + 0.25% de frais
+                                
+                                if balance.usdt_free < cost:
+                                    message = f"❌ Solde insuffisant! Vous avez seulement {balance.usdt_free:.4f} USDT disponible."
+                                    await query.message.reply_text(message)
+                                    return
+
+                                # Obtenir le prix actuel
+                                price_info = pancakeswap.get_price_info()
+                                current_price = price_info.current_price
+
+                                # Créer l'ordre d'achat
+                                order = pancakeswap.create_market_buy_order(amount)
+                                
+                                if order:
+                                    message = (
+                                        f"✅ <b>Achat de {amount} POLS effectué sur PancakeSwap</b>\n\n"
+                                        f"• Quantité: {amount} POLS\n"
+                                        f"• Prix: <code>{current_price:.4f}</code> USDT\n"
+                                        f"• Montant total: <code>{amount * current_price:.4f}</code> USDT\n"
+                                        f"• Frais (0.25%): <code>{amount * current_price * 0.0025:.4f}</code> USDT\n"
+                                        f"• Coût total: <code>{amount * current_price * 1.0025:.4f}</code> USDT\n\n"
+                                        f"🔗 <a href='https://bscscan.com/tx/{order}'>Voir la transaction sur BSCScan</a>"
+                                    )
+                                else:
+                                    message = "❌ Erreur lors de la création de l'ordre d'achat"
+                                    
+                            await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+                            
+                        except Exception as e:
+                            error_message = f"❌ Erreur lors de l'opération: {str(e)}"
+                            logging.error(error_message)
+                            await query.message.reply_text(error_message)
+                
+                # Nettoyer les données utilisateur
+                context.user_data.pop('amount', None)
+                context.user_data.pop('action', None)
+                context.user_data.pop('awaiting_amount', None)
             
             logging.info(f"Callback {query.data} traité avec succès")
         except Exception as e:
@@ -410,3 +586,89 @@ class TelegramNotifier:
     async def initialize(self):
         """Initialisation asynchrone du bot"""
         await self._init_bot() 
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère les messages reçus"""
+        try:
+            message = update.message.text
+            
+            # Si on attend un montant pour une opération d'achat/vente
+            if context.user_data.get('awaiting_amount'):
+                try:
+                    amount = float(message)
+                    if amount <= 0:
+                        await update.message.reply_text("❌ Le montant doit être supérieur à 0")
+                        return
+                        
+                    context.user_data['amount'] = amount
+                    action = context.user_data['action']
+                    
+                    # Récupérer les prix sur les deux exchanges
+                    kucoin = context.bot_data.get('kucoin')
+                    pancakeswap = context.bot_data.get('pancakeswap')
+                    
+                    if kucoin and pancakeswap:
+                        kucoin_price = kucoin.get_price_info()
+                        pancake_price = pancakeswap.get_price_info()
+                        
+                        if action == 'sell':
+                            # Calculer les revenus potentiels sur chaque exchange
+                            kucoin_revenue = amount * kucoin_price.sell_price * (1 - 0.001)  # 0.1% de frais
+                            pancake_revenue = amount * pancake_price.sell_price * (1 - 0.0025)  # 0.25% de frais
+                            
+                            message = (
+                                f"💰 <b>Vente de {amount} POLS</b>\n\n"
+                                f"<b>KuCoin:</b>\n"
+                                f"• Prix de vente: <code>{kucoin_price.sell_price:.4f}</code> USDT\n"
+                                f"• Frais (0.1%): <code>{amount * kucoin_price.sell_price * 0.001:.4f}</code> USDT\n"
+                                f"• Revenu net: <code>{kucoin_revenue:.4f}</code> USDT\n\n"
+                                f"<b>PancakeSwap:</b>\n"
+                                f"• Prix de vente: <code>{pancake_price.sell_price:.4f}</code> USDT\n"
+                                f"• Frais (0.25%): <code>{amount * pancake_price.sell_price * 0.0025:.4f}</code> USDT\n"
+                                f"• Revenu net: <code>{pancake_revenue:.4f}</code> USDT\n\n"
+                                f"<b>Différence:</b> <code>{abs(kucoin_revenue - pancake_revenue):.4f}</code> USDT"
+                            )
+                            
+                            # Ajouter des boutons pour choisir l'exchange
+                            keyboard = [
+                                [
+                                    InlineKeyboardButton("Vendre sur KuCoin", callback_data=f"sell_kucoin_{amount}"),
+                                    InlineKeyboardButton("Vendre sur PancakeSwap", callback_data=f"sell_pancake_{amount}")
+                                ]
+                            ]
+                        else:  # buy
+                            # Calculer les coûts potentiels sur chaque exchange
+                            kucoin_cost = amount * kucoin_price.buy_price * (1 + 0.001)  # 0.1% de frais
+                            pancake_cost = amount * pancake_price.buy_price * (1 + 0.0025)  # 0.25% de frais
+                            
+                            message = (
+                                f"🛒 <b>Achat de {amount} POLS</b>\n\n"
+                                f"<b>KuCoin:</b>\n"
+                                f"• Prix d'achat: <code>{kucoin_price.buy_price:.4f}</code> USDT\n"
+                                f"• Frais (0.1%): <code>{amount * kucoin_price.buy_price * 0.001:.4f}</code> USDT\n"
+                                f"• Coût total: <code>{kucoin_cost:.4f}</code> USDT\n\n"
+                                f"<b>PancakeSwap:</b>\n"
+                                f"• Prix d'achat: <code>{pancake_price.buy_price:.4f}</code> USDT\n"
+                                f"• Frais (0.25%): <code>{amount * pancake_price.buy_price * 0.0025:.4f}</code> USDT\n"
+                                f"• Coût total: <code>{pancake_cost:.4f}</code> USDT\n\n"
+                                f"<b>Différence:</b> <code>{abs(kucoin_cost - pancake_cost):.4f}</code> USDT"
+                            )
+                            
+                            # Ajouter des boutons pour choisir l'exchange
+                            keyboard = [
+                                [
+                                    InlineKeyboardButton("Acheter sur KuCoin", callback_data=f"buy_kucoin_{amount}"),
+                                    InlineKeyboardButton("Acheter sur PancakeSwap", callback_data=f"buy_pancake_{amount}")
+                                ]
+                            ]
+                            
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await update.message.reply_text(message, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+                        
+                except ValueError:
+                    await update.message.reply_text("❌ Veuillez entrer un nombre valide")
+                return
+
+        except Exception as e:
+            logging.error(f"Erreur lors de la gestion du message: {e}")
+            await update.message.reply_text("❌ Erreur lors de la gestion du message") 
