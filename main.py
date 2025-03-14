@@ -9,6 +9,7 @@ import asyncio
 from kucoin_exchange import KucoinExchange
 from pancakeswap_exchange import PancakeSwapExchange
 from telegram_notifier import TelegramNotifier
+from trading_strategy import TradingStrategy
 from dotenv import load_dotenv
 
 # Configuration du logging
@@ -91,10 +92,15 @@ def calculate_arbitrage_gains(kucoin: KucoinExchange, pancakeswap: PancakeSwapEx
 async def main():
     """Fonction principale"""
     try:
+
+        
         # Initialiser les exchanges et Telegram
         kucoin = KucoinExchange(pols_quantity=POLS_QUANTITY)
         pancakeswap = PancakeSwapExchange(pols_quantity=POLS_QUANTITY)
         telegram = TelegramNotifier(pols_quantity=POLS_QUANTITY)
+        
+        # Initialiser la stratégie de trading
+        strategy = TradingStrategy(kucoin, telegram)
         
         # Initialiser le bot de manière asynchrone
         await telegram.initialize()
@@ -105,6 +111,7 @@ async def main():
         # Stocker les instances des exchanges dans les données du bot
         telegram.app.bot_data['kucoin'] = kucoin
         telegram.app.bot_data['pancakeswap'] = pancakeswap
+        telegram.app.bot_data['strategy'] = strategy
         
         # Démarrer le bot Telegram en mode polling
         await telegram.app.initialize()
@@ -112,6 +119,7 @@ async def main():
         await telegram.app.updater.start_polling()
         
         last_notification_time = time.time()
+        last_strategy_check = time.time()
         
         while True:
             try:
@@ -136,12 +144,16 @@ async def main():
                 for step in arbitrage_gains['pancakeswap_to_kucoin']['steps']:
                     logging.info(step)
                 
-                # Envoyer une notification Telegram toutes les 30 minutes
+                # Vérifier la stratégie de trading toutes les 5 minutes
                 current_time = time.time()
-                # Envoyer un rapport complet toutes les 30 minutes
-                # if current_time - last_notification_time > 60 * 30:  # 30 minutes
-                #     await telegram.send_full_report(kucoin, pancakeswap)
-                #     last_notification_time = current_time
+                if current_time - last_strategy_check >= 300:  # 5 minutes
+                    strategy.check_and_update()
+                    last_strategy_check = current_time
+                
+                # Envoyer une notification Telegram toutes les 30 minutes
+                if current_time - last_notification_time > 60 * 30:  # 30 minutes
+                    await telegram.send_full_report(kucoin, pancakeswap)
+                    last_notification_time = current_time
                 
                 # Attendre 1 minute
                 await asyncio.sleep(60)
@@ -169,4 +181,4 @@ async def main():
             await telegram.app.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

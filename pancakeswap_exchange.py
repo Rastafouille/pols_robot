@@ -286,15 +286,12 @@ class PancakeSwapExchange(ExchangeBase):
             logging.error(f"Erreur lors de la vente sur PancakeSwap: {e}")
             raise 
 
-    def create_market_buy_order(self, amount: int) -> str:
-        """Crée un ordre d'achat au marché sur PancakeSwap"""
+    def create_market_buy_order(self, amount: float) -> str:
+        """Crée un ordre d'achat market sur PancakeSwap"""
         try:
-            # Récupérer l'adresse du wallet depuis la clé privée
+            # Récupérer l'adresse du wallet et la clé privée
+            wallet_address = self.wallet_address
             private_key = os.getenv("BSC_PRIVATE_KEY")
-            if not private_key:
-                raise ValueError("Clé privée BSC non configurée")
-                
-            wallet_address = self.web3.eth.account.from_key(private_key).address
             
             # Vérifier le solde USDT
             usdt_contract = self.web3.eth.contract(
@@ -302,25 +299,20 @@ class PancakeSwapExchange(ExchangeBase):
                 abi=self.ERC20_ABI
             )
             usdt_balance = usdt_contract.functions.balanceOf(wallet_address).call()
-            usdt_balance = self.web3.from_wei(usdt_balance, 'mwei')  # USDT a 6 décimales
+            cost = amount * self.get_price_info().buy_price
+            cost_wei = int(cost * 1e18)  # Convertir en wei (USDT a 6 décimales)
             
-            # Obtenir le prix actuel
-            price_info = self.get_price_info()
-            cost = amount * price_info.current_price * 1.0025  # Prix + 0.25% de frais
+            if usdt_balance < cost_wei:
+                raise ValueError(f"Solde USDT insuffisant: {usdt_balance / 1e6:.2f} USDT")
             
-            if usdt_balance < cost:
-                raise ValueError(f"Solde USDT insuffisant: {usdt_balance:.2f} USDT requis: {cost:.2f} USDT")
+            # Vérifier l'allowance USDT
+            allowance = usdt_contract.functions.allowance(wallet_address, self.web3.to_checksum_address(self.ROUTER_ADDRESS)).call()
             
-            # Vérifier l'approbation USDT pour le router
-            router_address = self.web3.to_checksum_address(self.ROUTER_ADDRESS)
-            current_allowance = usdt_contract.functions.allowance(wallet_address, router_address).call()
-            current_allowance = self.web3.from_wei(current_allowance, 'mwei')
-            
-            # Si l'approbation est insuffisante, approuver le router
-            if current_allowance < cost:
+            if allowance < cost_wei:
+                # Approuver le router pour dépenser les USDT
                 approve_txn = usdt_contract.functions.approve(
-                    router_address,
-                    self.web3.to_wei(cost * 1.1, 'mwei')  # 10% de marge pour les variations de prix
+                    self.web3.to_checksum_address(self.ROUTER_ADDRESS),
+                    cost_wei * 2  # Double de l'allowance pour les variations de prix
                 ).build_transaction({
                     'from': wallet_address,
                     'nonce': self.web3.eth.get_transaction_count(wallet_address),
@@ -328,53 +320,46 @@ class PancakeSwapExchange(ExchangeBase):
                     'gasPrice': self.web3.eth.gas_price
                 })
                 
+                # Signer et envoyer la transaction d'approbation
                 signed_txn = self.web3.eth.account.sign_transaction(approve_txn, private_key)
                 tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
-                self.web3.eth.wait_for_transaction_receipt(tx_hash)
-                logging.info(f"Approbation USDT effectuée: {tx_hash.hex()}")
+                receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
             
-            # Obtenir le chemin de swap optimal
-            path = [
-                self.web3.to_checksum_address(self.USDT_ADDRESS),
-                self.web3.to_checksum_address(self.POLS_ADDRESS)
-            ]
-            
-            # Calculer le montant minimum de POLS à recevoir (avec 0.5% de slippage)
+            # Calculer le montant minimum de POLS à recevoir (avec 1% de slippage)
             amounts_out = self.router_contract.functions.getAmountsOut(
-                self.web3.to_wei(cost, 'mwei'),
-                path
+                cost_wei,
+                [self.web3.to_checksum_address(self.USDT_ADDRESS), self.web3.to_checksum_address(self.POLS_ADDRESS)]
             ).call()
-            min_pols = int(amounts_out[-1] * 0.995)  # 0.5% de slippage
+            
+            # Le montant retourné est déjà en wei (18 décimales pour POLS)
+            min_pols = int(amounts_out[1] * 0.99)  # 1% de slippage
+            
+            logging.info(f"Montant USDT à dépenser: {cost_wei / 1e18:.2f} USDT")
+            logging.info(f"Montant POLS minimum à recevoir: {min_pols / 1e18:.4f} POLS")
             
             # Créer la transaction de swap
             deadline = int(time.time()) + 300  # 5 minutes
             
             txn = self.router_contract.functions.swapExactTokensForTokens(
-                self.web3.to_wei(cost, 'mwei'),  # Montant USDT exact
-                min_pols,  # Montant minimum de POLS à recevoir
-                path,
-                wallet_address,  # Adresse de destination
+                cost_wei,  # Montant exact d'USDT à dépenser
+                min_pols,   # Montant minimum de POLS à recevoir
+                [self.web3.to_checksum_address(self.USDT_ADDRESS), self.web3.to_checksum_address(self.POLS_ADDRESS)],
+                wallet_address,
                 deadline
             ).build_transaction({
                 'from': wallet_address,
                 'nonce': self.web3.eth.get_transaction_count(wallet_address),
-                'gas': 250000,
+                'gas': 200000,
                 'gasPrice': self.web3.eth.gas_price
             })
             
             # Signer et envoyer la transaction
             signed_txn = self.web3.eth.account.sign_transaction(txn, private_key)
             tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
-            
-            # Attendre la confirmation
             receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
             
-            if receipt['status'] == 1:
-                logging.info(f"Transaction d'achat réussie: {tx_hash.hex()}")
-                return tx_hash.hex()
-            else:
-                raise Exception("La transaction a échoué")
-                
+            return receipt['transactionHash'].hex()
+            
         except Exception as e:
-            logging.error(f"Erreur lors de l'achat: {str(e)}")
+            logging.error(f"Erreur lors de l'achat sur PancakeSwap: {e}")
             raise 

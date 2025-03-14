@@ -167,3 +167,75 @@ class KucoinExchange(ExchangeBase):
         except Exception as e:
             logging.error(f"Erreur lors de l'achat sur KuCoin: {e}")
             raise 
+
+    def create_limit_order(self, symbol: str, side: str, size: float, price: float) -> dict:
+        """Crée un ordre limit
+        
+        Args:
+            symbol (str): Paire de trading (ex: 'POLS-USDT')
+            side (str): 'buy' ou 'sell'
+            size (float): Quantité à trader
+            price (float): Prix de l'ordre
+            
+        Returns:
+            dict: Réponse de l'API contenant les détails de l'ordre
+        """
+        try:
+            # Vérifier le solde disponible
+            balance = self.get_balance()
+            if side == 'sell' and balance.pols_free < size:
+                raise ValueError(f"Solde POLS insuffisant: {balance.pols_free:.4f} < {size:.4f}")
+            elif side == 'buy' and balance.usdt_free < size * price:
+                raise ValueError(f"Solde USDT insuffisant: {balance.usdt_free:.2f} < {size * price:.2f}")
+            
+            # Formater le prix avec exactement 4 décimales
+            formatted_price = f"{price:.4f}"
+            
+            # Créer l'ordre
+            order = self.client.create_limit_order(
+                symbol=symbol,
+                side=side,
+                size=str(size),
+                price=formatted_price
+            )
+            
+            logging.info(f"Ordre limit créé: {side} {size:.4f} {symbol} @ {formatted_price}")
+            return order
+            
+        except Exception as e:
+            logging.error(f"Erreur lors de la création de l'ordre limit: {e}")
+            raise
+    
+    def cancel_order(self, order_id: str) -> bool:
+        """Annule un ordre
+        
+        Args:
+            order_id (str): ID de l'ordre à annuler
+            
+        Returns:
+            bool: True si l'ordre a été annulé avec succès
+        """
+        try:
+            self.client.cancel_order(order_id)
+            logging.info(f"Ordre {order_id} annulé avec succès")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Erreur lors de l'annulation de l'ordre {order_id}: {e}")
+            return False
+    
+    def get_order(self, order_id: str) -> dict:
+        """Récupère les détails d'un ordre
+        
+        Args:
+            order_id (str): ID de l'ordre
+            
+        Returns:
+            dict: Détails de l'ordre
+        """
+        try:
+            return self.client.get_order_details(order_id)
+            
+        except Exception as e:
+            logging.error(f"Erreur lors de la récupération de l'ordre {order_id}: {e}")
+            raise

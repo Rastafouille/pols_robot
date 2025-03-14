@@ -5,11 +5,10 @@ import os
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, Update
 from telegram.constants import ParseMode
 from typing import Optional, Dict, Any
-from telegram import filters
 
 class TelegramNotifier:
     """Gestionnaire des notifications Telegram"""
@@ -22,15 +21,24 @@ class TelegramNotifier:
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.app = None
         self.pols_quantity = pols_quantity
-        self.arbitrage_threshold = 0.5  # Seuil d'arbitrage en pourcentage (modifié de 1.0 à 0.5)
+        self.arbitrage_threshold = 5.0  # Seuil d'arbitrage en pourcentage (modifié de 1.0 à 0.5)
+        
+        # Récupérer la liste des utilisateurs autorisés depuis .env
+        authorized_users_str = os.getenv("AUTHORIZED_USERS", "")
+        self.authorized_users = [int(user_id.strip()) for user_id in authorized_users_str.split(",") if user_id.strip()]
         
         logging.info(f"Token Telegram: {'Configuré' if self.token else 'Non configuré'}")
         logging.info(f"Chat ID Telegram: {'Configuré' if self.chat_id else 'Non configuré'}")
+        logging.info(f"Utilisateurs autorisés: {self.authorized_users}")
         
-        if not all([self.token, self.chat_id]):
+        if not all([self.token, self.chat_id, self.authorized_users]):
             logging.error("Configuration Telegram incomplète dans .env")
             raise ValueError("Configuration Telegram incomplète dans .env")
             
+    def is_user_authorized(self, user_id: int) -> bool:
+        """Vérifie si l'utilisateur est autorisé à utiliser le bot"""
+        return user_id in self.authorized_users
+    
     async def _init_bot(self):
         """Initialise le bot Telegram"""
         try:
@@ -71,14 +79,40 @@ class TelegramNotifier:
     async def _handle_config(self, update, context):
         """Affiche la configuration actuelle"""
         try:
+            user_id = update.effective_user.id
+            if not self.is_user_authorized(user_id):
+                await update.message.reply_text(
+                    "❌ Désolé, vous n'êtes pas autorisé à utiliser ce bot.\n"
+                    "Contactez l'administrateur pour obtenir l'accès."
+                )
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
+            # Récupérer l'instance de la stratégie de trading
+            strategy = context.bot_data.get('strategy')
+            
             message = (
                 f"⚙️ <b>Configuration actuelle</b>\n\n"
+                f"<b>Paramètres de Monitoring:</b>\n"
                 f"• Quantité POLS: {self.pols_quantity}\n"
                 f"• Seuil d'arbitrage: {self.arbitrage_threshold}%\n\n"
-                f"Pour modifier:\n"
-                f"/set_quantity [nombre] - Définir la quantité de POLS\n"
-                f"/set_threshold [pourcentage] - Définir le seuil d'arbitrage"
+                f"<b>Paramètres de Trading:</b>\n"
+                f"• Périodes MA: {strategy.MA_PERIODS}\n"
+                f"• Timeframe: {strategy.TIMEFRAME}\n"
+                f"• Seuil de hausse: {strategy.PRICE_INCREASE_THRESHOLD*100}%\n"
+                f"• Seuil de baisse: {strategy.DROP_THRESHOLD*100}%\n"
+                f"• Offset ordre limit: {strategy.LIMIT_ORDER_OFFSET*100}%\n"
+                f"• Taille des ordres: {strategy.ORDER_SIZE} POLS\n\n"
+                f"<b>Statut:</b>\n"
+                f"• Monitoring actif: {'✅' if strategy.is_monitoring else '❌'}\n"
             )
+            
+            # Ajouter le prix le plus haut si disponible
+            if strategy.highest_price:
+                message += f"• Prix le plus haut: {strategy.highest_price:.4f} USDT"
+            else:
+                message += "• Prix le plus haut: N/A"
+                
             await update.message.reply_text(message, parse_mode=ParseMode.HTML)
         except Exception as e:
             logging.error(f"Erreur lors de l'affichage de la configuration: {e}")
@@ -86,6 +120,15 @@ class TelegramNotifier:
     async def _handle_set_threshold(self, update, context):
         """Définit le seuil d'arbitrage"""
         try:
+            user_id = update.effective_user.id
+            if not self.is_user_authorized(user_id):
+                await update.message.reply_text(
+                    "❌ Désolé, vous n'êtes pas autorisé à utiliser ce bot.\n"
+                    "Contactez l'administrateur pour obtenir l'accès."
+                )
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
             if not context.args or not context.args[0].replace('.', '').isdigit():
                 await update.message.reply_text(
                     "❌ Usage: /set_threshold <pourcentage>\n"
@@ -109,6 +152,15 @@ class TelegramNotifier:
     async def _handle_set_quantity(self, update, context):
         """Définit la quantité de POLS"""
         try:
+            user_id = update.effective_user.id
+            if not self.is_user_authorized(user_id):
+                await update.message.reply_text(
+                    "❌ Désolé, vous n'êtes pas autorisé à utiliser ce bot.\n"
+                    "Contactez l'administrateur pour obtenir l'accès."
+                )
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
             if not context.args or not context.args[0].isdigit():
                 await update.message.reply_text(
                     "❌ Usage: /set_quantity [nombre]\n"
@@ -140,17 +192,26 @@ class TelegramNotifier:
     async def _handle_start(self, update, context):
         """Gère la commande /start"""
         try:
+            user_id = update.effective_user.id
+            if not self.is_user_authorized(user_id):
+                await update.message.reply_text(
+                    "❌ Désolé, vous n'êtes pas autorisé à utiliser ce bot.\n"
+                    "Contactez l'administrateur pour obtenir l'accès."
+                )
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
             keyboard = [
                 [
                     InlineKeyboardButton("📊 Rapport complet", callback_data="report"),
                     InlineKeyboardButton("📈 Opportunités d'arbitrage", callback_data="arbitrage")
                 ],
                 [
-                    InlineKeyboardButton("⚙️ Configuration", callback_data="config"),
+                    InlineKeyboardButton("🛒 Acheter POLS", callback_data="buy_pols"),
                     InlineKeyboardButton("💰 Vendre POLS", callback_data="sell_pols")
                 ],
                 [
-                    InlineKeyboardButton("🛒 Acheter POLS", callback_data="buy_pols")
+                    InlineKeyboardButton("⚙️ Configuration", callback_data="config")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -161,7 +222,7 @@ class TelegramNotifier:
                 f"Seuil d'arbitrage: {self.arbitrage_threshold}%\n\n",
                 reply_markup=reply_markup
             )
-            logging.info("Message de démarrage envoyé avec succès")
+            logging.info(f"Message de démarrage envoyé à l'utilisateur {user_id}")
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi du message de démarrage: {e}")
     
@@ -169,6 +230,13 @@ class TelegramNotifier:
         """Gère les callbacks des boutons"""
         try:
             query = update.callback_query
+            user_id = query.from_user.id
+            
+            if not self.is_user_authorized(user_id):
+                await query.answer("❌ Vous n'êtes pas autorisé à utiliser ce bot.")
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
             await query.answer()
             
             if query.data == "report":
@@ -197,14 +265,31 @@ class TelegramNotifier:
                     )
                     await query.message.reply_text(message, parse_mode=ParseMode.HTML)
             elif query.data == "config":
+                # Récupérer l'instance de la stratégie de trading
+                strategy = context.bot_data.get('strategy')
+                
                 message = (
                     f"⚙️ <b>Configuration actuelle</b>\n\n"
+                    f"<b>Paramètres de Monitoring:</b>\n"
                     f"• Quantité POLS: {self.pols_quantity}\n"
                     f"• Seuil d'arbitrage: {self.arbitrage_threshold}%\n\n"
-                    f"Pour modifier:\n"
-                    f"/set_quantity [nombre] - Définir la quantité de POLS\n"
-                    f"/set_threshold [pourcentage] - Définir le seuil d'arbitrage"
+                    f"<b>Paramètres de Trading:</b>\n"
+                    f"• Périodes MA: {strategy.MA_PERIODS}\n"
+                    f"• Timeframe: {strategy.TIMEFRAME}\n"
+                    f"• Seuil de hausse: {strategy.PRICE_INCREASE_THRESHOLD*100}%\n"
+                    f"• Seuil de baisse: {strategy.DROP_THRESHOLD*100}%\n"
+                    f"• Offset ordre limit: {strategy.LIMIT_ORDER_OFFSET*100}%\n"
+                    f"• Taille des ordres: {strategy.ORDER_SIZE} POLS\n\n"
+                    f"<b>Statut:</b>\n"
+                    f"• Monitoring actif: {'✅' if strategy.is_monitoring else '❌'}\n"
                 )
+                
+                # Ajouter le prix le plus haut si disponible
+                if strategy.highest_price:
+                    message += f"• Prix le plus haut: {strategy.highest_price:.4f} USDT"
+                else:
+                    message += "• Prix le plus haut: N/A"
+                    
                 await query.message.reply_text(message, parse_mode=ParseMode.HTML)
             elif query.data == "sell_pols":
                 message = (
@@ -590,6 +675,15 @@ class TelegramNotifier:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère les messages reçus"""
         try:
+            user_id = update.effective_user.id
+            if not self.is_user_authorized(user_id):
+                await update.message.reply_text(
+                    "❌ Désolé, vous n'êtes pas autorisé à utiliser ce bot.\n"
+                    "Contactez l'administrateur pour obtenir l'accès."
+                )
+                logging.warning(f"Tentative d'accès non autorisée de l'utilisateur {user_id}")
+                return
+                
             message = update.message.text
             
             # Si on attend un montant pour une opération d'achat/vente
