@@ -151,7 +151,7 @@ async def main():
                     last_strategy_check = current_time
                 
                 # Envoyer une notification Telegram toutes les 30 minutes
-                if current_time - last_notification_time > 60 * 30:  # 30 minutes
+                if current_time - last_notification_time > 60 * 60 * 6:  # 6 heures
                     await telegram.send_full_report(kucoin, pancakeswap)
                     last_notification_time = current_time
                 
