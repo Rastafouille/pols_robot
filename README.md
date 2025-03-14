@@ -18,7 +18,7 @@ Bot de trading automatique pour le token POLS, permettant de :
 - Notifier via Telegram
 
 ## Architecture
-![Architecture du bot](archi.png)
+![Architecture du bot](archi.jpg)
 
 Le bot est composé de plusieurs modules interconnectés :
 
