@@ -11,7 +11,7 @@ from exchange_base import ExchangeBase, PriceInfo, BalanceInfo
 class KucoinExchange(ExchangeBase):
     """Gestion des opérations sur KuCoin"""
     
-    def __init__(self, pols_quantity: int = 1000):
+    def __init__(self, pols_quantity: int = 5000):
         """Initialise l'exchange KuCoin"""
         super().__init__("KuCoin")
         self.pols_quantity = pols_quantity

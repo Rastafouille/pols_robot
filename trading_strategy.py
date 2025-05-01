@@ -44,10 +44,11 @@ class TradingStrategy:
             current_time = datetime.now()
             
             # Ajouter le nouveau prix à l'historique
-            self.price_history = self.price_history.append({
-                'timestamp': current_time,
-                'price': current_price
-            }, ignore_index=True)
+            new_row = pd.DataFrame([{'timestamp': current_time, 'price': current_price}])
+            if self.price_history.empty:
+                self.price_history = new_row
+            else:
+                self.price_history = pd.concat([self.price_history, new_row], ignore_index=True)
             
             # Garder uniquement les 100 derniers prix
             if len(self.price_history) > 100:

@@ -1,5 +1,7 @@
 kucoin-universal-sdk==1.1.1
 python-dotenv==1.0.1
+pandas==2.2.1
+python-kucoin==2.1.0
 
 # Dépendances PancakeSwap
 web3==6.15.1

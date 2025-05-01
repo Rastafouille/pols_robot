@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any
 class TelegramNotifier:
     """Gestionnaire des notifications Telegram"""
     
-    def __init__(self, pols_quantity: int = 1000):
+    def __init__(self, pols_quantity: int = 5000):
         """Initialise le notificateur Telegram"""
         logging.info("Initialisation du TelegramNotifier...")
         load_dotenv()
@@ -21,7 +21,7 @@ class TelegramNotifier:
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.app = None
         self.pols_quantity = pols_quantity
-        self.arbitrage_threshold = 5.0  # Seuil d'arbitrage en pourcentage (modifié de 1.0 à 0.5)
+        self.arbitrage_threshold = 7.0  # Seuil d'arbitrage en pourcentage (modifié de 1.0 à 0.5)
         
         # Récupérer la liste des utilisateurs autorisés depuis .env
         authorized_users_str = os.getenv("AUTHORIZED_USERS", "")
@@ -211,7 +211,8 @@ class TelegramNotifier:
                     InlineKeyboardButton("💰 Vendre POLS", callback_data="sell_pols")
                 ],
                 [
-                    InlineKeyboardButton("⚙️ Configuration", callback_data="config")
+                    InlineKeyboardButton("⚙️ Configuration", callback_data="config"),
+                    InlineKeyboardButton("🟢 Trailing Stop", callback_data="trailing_stop")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -267,7 +268,6 @@ class TelegramNotifier:
             elif query.data == "config":
                 # Récupérer l'instance de la stratégie de trading
                 strategy = context.bot_data.get('strategy')
-                
                 message = (
                     f"⚙️ <b>Configuration actuelle</b>\n\n"
                     f"<b>Paramètres de Monitoring:</b>\n"
@@ -283,13 +283,51 @@ class TelegramNotifier:
                     f"<b>Statut:</b>\n"
                     f"• Monitoring actif: {'✅' if strategy.is_monitoring else '❌'}\n"
                 )
-                
                 # Ajouter le prix le plus haut si disponible
                 if strategy.highest_price:
                     message += f"• Prix le plus haut: {strategy.highest_price:.4f} USDT"
                 else:
                     message += "• Prix le plus haut: N/A"
-                    
+                await query.message.reply_text(message, parse_mode=ParseMode.HTML)
+
+            elif query.data == "trailing_stop":
+                strategy = context.bot_data.get('strategy')
+                if strategy is None:
+                    await query.message.reply_text("❌ Stratégie non initialisée.")
+                    return
+                # Historique MA et calculs même si peu de valeurs
+                if not strategy.price_history.empty:
+                    current_price = strategy.price_history['price'].iloc[-1]
+                    # MA sur toutes les valeurs disponibles
+                    ma = strategy.price_history['price'].mean()
+                    ma_history = strategy.price_history['price'].expanding().mean().tail(10)
+                    ma_history_str = '\n'.join([f"{v:.4f}" for v in ma_history])
+                    ecart = (current_price - ma) / ma * 100 if ma != 0 else 0
+                    ecart_str = f"{ecart:.2f}%"
+                    ma_str = f"{ma:.4f}"
+                else:
+                    current_price = None
+                    ma_history_str = "Pas assez de données."
+                    ecart_str = "N/A"
+                    ma_str = "N/A"
+                # Paramètres
+                params = (
+                    f"<b>Paramètres stratégie :</b>\n"
+                    f"• MA_PERIODS : {strategy.MA_PERIODS}\n"
+                    f"• TIMEFRAME : {strategy.TIMEFRAME}\n"
+                    f"• PRICE_INCREASE_THRESHOLD : {strategy.PRICE_INCREASE_THRESHOLD*100:.2f}%\n"
+                    f"• DROP_THRESHOLD : {strategy.DROP_THRESHOLD*100:.2f}%\n"
+                    f"• LIMIT_ORDER_OFFSET : {strategy.LIMIT_ORDER_OFFSET*100:.2f}%\n"
+                    f"• ORDER_SIZE : {strategy.ORDER_SIZE} POLS\n"
+                )
+                message = (
+                    f"<b>🟢 Trailing Stop - Suivi MA</b>\n\n"
+                    f"<b>Historique MA (10 derniers):</b>\n{ma_history_str}\n\n"
+                    f"<b>Prix Kucoin actuel :</b> {current_price if current_price is not None else 'N/A'}\n"
+                    f"<b>MA actuelle :</b> {ma_str}\n"
+                    f"<b>Écart prix/MA :</b> {ecart_str}\n\n"
+                    f"{params}"
+                )
                 await query.message.reply_text(message, parse_mode=ParseMode.HTML)
             elif query.data == "sell_pols":
                 message = (
@@ -588,6 +626,11 @@ class TelegramNotifier:
     async def send_message(self, message: str):
         """Envoie un message sur Telegram"""
         try:
+            # Filtrer les messages contenant l'erreur spécifique
+            if "KucoinAPIException 400201" in message:
+                logging.info("Notification d'erreur KucoinAPIException 400201 ignorée.")
+                return
+            
             logging.info("Tentative d'envoi d'un message Telegram...")
             logging.info(f"Chat ID: {self.chat_id}")
             logging.info(f"Message: {message[:100]}...")
@@ -765,4 +808,8 @@ class TelegramNotifier:
 
         except Exception as e:
             logging.error(f"Erreur lors de la gestion du message: {e}")
-            await update.message.reply_text("❌ Erreur lors de la gestion du message") 
+            await update.message.reply_text("❌ Erreur lors de la gestion du message")
+
+        # Met à jour l'historique des prix à chaque minute
+        strategy.update_price_history()
+        await asyncio.sleep(60) 

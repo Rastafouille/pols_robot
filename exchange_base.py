@@ -33,7 +33,7 @@ class ExchangeBase(ABC):
         self._last_balance: Optional[BalanceInfo] = None
 
     @abstractmethod
-    def get_price_info(self, amount: float = 1000.0) -> PriceInfo:
+    def get_price_info(self, amount: float = 5000.0) -> PriceInfo:
         """Obtient les informations de prix pour un montant donné"""
         pass
 

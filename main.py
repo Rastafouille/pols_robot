@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 
 # Configuration globale
-POLS_QUANTITY = 1000  # Quantité de POLS pour les calculs d'arbitrage
+POLS_QUANTITY = 5000  # Quantité de POLS pour les calculs d'arbitrage
 
 def print_exchange_info(exchange_name: str, price_info, balance_info):
     """Affiche les informations d'un exchange"""
@@ -149,7 +149,10 @@ async def main():
                 if current_time - last_strategy_check >= 300:  # 5 minutes
                     strategy.check_and_update()
                     last_strategy_check = current_time
-                
+
+                # Mise à jour de l'historique des prix à chaque minute
+                strategy.update_price_history()
+
                 # Envoyer une notification Telegram toutes les 30 minutes
                 if current_time - last_notification_time > 60 * 60 * 6:  # 6 heures
                     await telegram.send_full_report(kucoin, pancakeswap)
